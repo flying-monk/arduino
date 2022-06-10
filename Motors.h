@@ -1,60 +1,20 @@
 #include <Arduino.h>
 
 #define encoder_left_pin_A 2
-#define encoder_left_pin_B 4
+#define encoder_left_pin_B 3
 
-#define encoder_right_pin_A 3
-#define encoder_right_pin_B 5
+#define encoder_right_pin_A 20
+#define encoder_right_pin_B 21
 
-#define left_motor_direction 6
-#define right_motor_direction 8
+#define left_motor_direction A0
+#define right_motor_direction A1
 
 #define left_motor_pwm 10
-#define right_motor_pwm 11
-
-const int encoder_minimum = -32768;
-const int encoder_maximum = 32767;
-
-boolean Direction_left = true;
-boolean Direction_right = true;
-
-const bool left_fwd = true;
-const bool right_fwd = false;
-
-unsigned long lastMilli = 0;
-const double radius = 0.1;                   
-const double wheelbase = 0.030;               
-
-double speed_req = 0;                        
-double angular_speed_req = 0;               
-
-double speed_req_left = 0;             
-double speed_act_left = 0;               
-double speed_cmd_left = 0;               
-
-double speed_req_right = 0;                  
-double speed_act_right = 0;                  
-double speed_cmd_right = 0;
-
-volatile float pos_left = 0;       
-volatile float pos_right = 0; 
-
-const double max_speed = 0.4;
-
-const int default_vel = 80;
-int state_vel = default_vel;
-enum State {FWD, BWD, RIGHT, LEFT, STOP};
-State state;
-const int max_vel = 255;
-
-unsigned int noCommLoops = 0;
-
-int PWM_leftMotor = 0;                
-int PWM_rightMotor = 0;
+#define right_motor_pwm 11         
 
 namespace Motors{
-  byte motor_state[2] = {1, 1};
-  uint8_t motor_dir[2] = {LOW, HIGH};
+  byte motor_state[2] = {1, 0};
+  uint8_t motor_dir[2] = {LOW, LOW};
   int motor_data[2] = {0, 0};
   unsigned long state_stamp[2] = {0, 0};
   
@@ -64,14 +24,44 @@ namespace Motors{
   int left_motor_pulse;
   int right_motor_pulse;
 
-  void left_motor_count(){
-    if (digitalRead(encoder_left_pin_A) == digitalRead(encoder_left_pin_B)) current_left_motor_pulse++;
-    else current_left_motor_pulse--;
+  volatile int lastEncoded = 0;
+  volatile int lastEncoded_right = 0;
+  int sig;
+
+//  void left_motor_count(){
+//    if (digitalRead(encoder_left_pin_A) == digitalRead(encoder_left_pin_B)) current_left_motor_pulse++;
+//    else current_left_motor_pulse--;
+//  }
+
+  void updateEncoder(){
+  int MSB = digitalRead(encoder_left_pin_A); //MSB = most significant bit
+  int LSB = digitalRead(encoder_left_pin_B); //LSB = least significant bit
+
+  int encoded = (MSB << 1) |LSB; //converting the 2 pin value to single number
+  int sum  = (lastEncoded << 2) | encoded; //adding it to the previous encoded value
+
+  if(sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011) current_left_motor_pulse ++;
+  if(sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000) current_left_motor_pulse --;
+
+  lastEncoded = encoded; //store this value for next time
   }
 
-  void right_motor_count(){
-    if (digitalRead(encoder_right_pin_A) == digitalRead(encoder_right_pin_B)) current_right_motor_pulse++;
-    else current_right_motor_pulse--;
+//  void right_motor_count(){
+//    if (digitalRead(encoder_right_pin_A) == digitalRead(encoder_right_pin_B)) current_right_motor_pulse++;
+//    else current_right_motor_pulse--;
+//  }
+
+  void updateEncoder_right(){
+  int MSB_right = digitalRead(encoder_right_pin_A); //MSB = most significant bit
+  int LSB_right = digitalRead(encoder_right_pin_B); //LSB = least significant bit
+
+  int encoded_right = (MSB_right << 1) |LSB_right; //converting the 2 pin value to single number
+  int sum_right  = (lastEncoded_right << 2) | encoded_right; //adding it to the previous encoded value
+
+  if(sum_right == 0b1101 || sum_right == 0b0100 || sum_right == 0b0010 || sum_right == 0b1011) current_right_motor_pulse ++;
+  if(sum_right == 0b1110 || sum_right == 0b0111 || sum_right == 0b0001 || sum_right == 0b1000) current_right_motor_pulse --;
+
+  lastEncoded_right = encoded_right; //store this value for next time
   }
 
   int get_left_motor_pulse(){
@@ -83,8 +73,8 @@ namespace Motors{
   }
 
   void init_state_motors(){
-    digitalWrite(left_motor_direction, LOW);
-    digitalWrite(right_motor_direction, LOW);
+    analogWrite(left_motor_direction, motor_dir[1]);
+    analogWrite(right_motor_direction, motor_dir[0]);
     digitalWrite(left_motor_pwm, LOW);
     digitalWrite(right_motor_pwm, LOW);
     digitalWrite(encoder_left_pin_A, HIGH);
@@ -95,16 +85,18 @@ namespace Motors{
   }
 
   void init_motors(){
-    pinMode(left_motor_direction, motor_dir[0]);
-    pinMode(right_motor_direction, motor_dir[1]);
+    pinMode(left_motor_direction, OUTPUT);
+    pinMode(right_motor_direction, OUTPUT);
     pinMode(left_motor_pwm, OUTPUT);
     pinMode(right_motor_pwm, OUTPUT);
-    pinMode(encoder_left_pin_A, INPUT);
-    pinMode(encoder_left_pin_B, INPUT);
-    pinMode(encoder_right_pin_A, INPUT);
-    pinMode(encoder_right_pin_B, INPUT);
-    attachInterrupt(0, left_motor_count, RISING);
-    attachInterrupt(1, right_motor_count, RISING);
+    pinMode(encoder_left_pin_A, INPUT_PULLUP);
+    pinMode(encoder_left_pin_B, INPUT_PULLUP);
+    pinMode(encoder_right_pin_A, INPUT_PULLUP);
+    pinMode(encoder_right_pin_B, INPUT_PULLUP);
+    attachInterrupt(0, updateEncoder, CHANGE);
+    attachInterrupt(1, updateEncoder, CHANGE);
+    attachInterrupt(2, updateEncoder_right, CHANGE);
+    attachInterrupt(3, updateEncoder_right, CHANGE);
     init_state_motors();
   }
 
@@ -139,8 +131,7 @@ namespace Motors{
     if (millis()-state_stamp[i] > 10){
       if (motor_data[i] != 0){
         analogWrite(mvrm, byte(abs(motor_data[i])));
-        digitalWrite(mdir, (motor_dir[i] = (motor_data[i] < 0)?HIGH:LOW));
-
+        digitalWrite(mdir, (motor_dir[i] = (motor_data[i] < 0)?LOW:HIGH));
         motor_state[i] = 0;
         state_stamp[i] = millis();
       }
@@ -158,47 +149,11 @@ namespace Motors{
   void updateState(){
     left_motor_pulse += (motor_dir[0] == LOW ? current_left_motor_pulse : -current_left_motor_pulse);
     current_left_motor_pulse = 0;
-
-    right_motor_pulse += (motor_dir[0] == LOW ? current_right_motor_pulse : -current_right_motor_pulse);
-    current_right_motor_pulse = 0;
-
     updateMotorState(0, left_motor_direction, left_motor_pwm);
+
+    right_motor_pulse += (motor_dir[1] == HIGH ? current_right_motor_pulse : -current_right_motor_pulse);
+    current_right_motor_pulse = 0;    
     updateMotorState(1, right_motor_direction, right_motor_pwm);
     
-  }
-
-  void MoveBwd(const size_t speed) {
-    digitalWrite(right_motor_direction, right_fwd);
-    digitalWrite(left_motor_direction, !left_fwd);
-    analogWrite(right_motor_pwm, speed);
-    analogWrite(left_motor_pwm, speed);
-  }
-  
-  void MoveFwd(const size_t speed) {
-    digitalWrite(right_motor_direction, !right_fwd);
-    digitalWrite(left_motor_direction, left_fwd);
-    analogWrite(right_motor_pwm, speed);
-    analogWrite(left_motor_pwm, speed);
-  }
-  
-  void MoveRight(const size_t speed) {
-    digitalWrite(right_motor_direction, right_fwd);
-    digitalWrite(left_motor_direction, left_fwd);
-    analogWrite(right_motor_pwm, speed);
-    analogWrite(left_motor_pwm, speed);
-  }
-  
-  void MoveLeft(const size_t speed) {
-    digitalWrite(right_motor_direction, !right_fwd);
-    digitalWrite(left_motor_direction, !left_fwd);
-    analogWrite(right_motor_pwm, speed);
-    analogWrite(left_motor_pwm, speed);
-  }
-  
-  void MoveStop() {
-    digitalWrite(right_motor_direction, right_fwd);
-    digitalWrite(left_motor_direction, left_fwd);
-    analogWrite(right_motor_pwm, 0);
-    analogWrite(left_motor_pwm, 0);
   }
 }
